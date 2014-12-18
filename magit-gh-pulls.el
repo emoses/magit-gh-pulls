@@ -4,7 +4,7 @@
 
 ;; Author: Yann Hodique <yann.hodique@gmail.com>
 ;; Keywords: tools
-;; Version: 0.4
+;; Version: 0.4.1
 ;; URL: https://github.com/sigma/magit-gh-pulls
 ;; Package-Requires: ((emacs "24") (gh "0.4.3") (magit "1.1.0") (pcache "0.2.3") (s "1.6.1"))
 
@@ -72,23 +72,116 @@
       (let* ((split (split-string cfg "/")))
         (cons (car split) (cadr split))))))
 
-(defun magit-gh-pulls-parse-url (url)
-  (let ((creds (cond
-                ((s-matches? "github.com:" url)
-                 (s-match "github.com:\\(.+\\)/\\([^.]+\\)\\(.git\\)?$" url))
 
-                ((s-matches? "^https?://github.com" url)
-                 (s-match "^https://github.com/\\(.+\\)/\\([^./]+\\)\\(.git\\)?/?$" url))
-                ((s-matches? "git://github.com/" url)
-                 (s-match "git://github.com/\\(.+\\)/\\([^.]+\\)\\(.git\\)?$" url)))))
-    (when creds
-      (cons (cadr creds) (caddr creds)))))
+;;Find all the Hostname Lines until we hit the end of config-lines or the
+;;next Host line.  Return '(remaining-config-lines list-of-hostnames)
+(defun magit-gh-pulls-collect-hostnames (config-lines)
+  (let ((cur-line (car config-lines))
+        (rest config-lines)
+        (result '()))
+    (while (and cur-line (not (string= (cadr cur-line) "Host")))
+      (setq result (cons (cadr (cdr cur-line)) result))
+      (setq rest (cdr rest))
+      (setq cur-line (car rest)))
+    (list rest result)))
+
+(ert-deftest magit-gh-pulls-collect-hostnames-test ()
+  (let* ((sample-input '("extraneous" "Hostname one.other.com" "User doesntmatter" "HostName two.other.com"))
+         (sample-data-end (-magit-gh-pulls-filter-and-split-host-lines sample-input)) 
+         (more-input '("Host two" "Hostname should.not.show.up"))
+         (sample-data (-magit-gh-pulls-filter-and-split-host-lines (append sample-input more-input))))
+    (should (equal (magit-gh-pulls-collect-hostnames sample-data-end) '(() ("two.other.com" "one.other.com"))))
+    (should (equal (magit-gh-pulls-collect-hostnames sample-data) (list (-magit-gh-pulls-filter-and-split-host-lines more-input) '("two.other.com" "one.other.com")))))) 
+                     
+(defun magit-gh-pulls-get-host-hostnames (config-lines)
+  (let (result-alist
+        (curline (car config-lines))
+        (rest-lines (cdr config-lines)))
+    (while rest-lines
+      (if (string= (cadr curline) "Host")
+          (let ((hosts (s-split "\\s*" (cadr (cdr curline)))) ;;List of the host aliases
+                (rest-result (magit-gh-pulls-collect-hostnames rest-lines)))
+            (dolist (host hosts)
+              ;;Host must be lowercase because the url parser lowercases the string
+              (setq result-alist (cons (cons (downcase host) (cadr rest-result)) result-alist)))
+            (setq curline (caar rest-result))
+            (setq rest-lines (cdar rest-result)))
+        (progn
+          (setq curline (car rest-lines))
+          (setq rest-lines (cdr rest-lines)))))
+    result-alist))                      
+        
+(ert-deftest magit-gh-pulls-host-hostnames-test ()
+  (let* ((sample-input '("Host one" "extraneous" "\tHostname one.other.com" "\t\tUser doesntmatter" "HostName two.other.com"))
+         (sample-data (-magit-gh-pulls-filter-and-split-host-lines sample-input))
+         (more-input '("Sir not appearing in this picture" "Host two" "IdentityFile ~/.ssh/HostName" "\tUser Host" "HostName two.host.com"))
+         (bigger-sample (-magit-gh-pulls-filter-and-split-host-lines (append sample-input more-input))))
+    (should (equal (magit-gh-pulls-get-host-hostnames sample-data) '(("one" . ("two.other.com" "one.other.com")))))
+    (should (equal (magit-gh-pulls-get-host-hostnames bigger-sample) '(("two" . ("two.host.com")) ("one" . ("two.other.com" "one.other.com")))))))
+         
+
+(defun -magit-gh-pulls-filter-and-split-host-lines (lines)
+  (delq nil
+        (mapcar (lambda (line)
+                  (s-match "^[ \t]*\\(Host\\|HostName\\|Hostname\\)[ \t]+\\(.+\\)$" line))
+                lines)))
+                       
+                  
+;; Port of github/hub's SSHConfig
+(defun magit-gh-pulls-get-ssh-config-hosts ()
+  (let* ((file-lines (mapcar (lambda (path)
+                             (if (file-exists-p path)
+                                 (with-temp-buffer
+                                   (insert-file-contents path)
+                                   (split-string (buffer-string) "\n" t))
+                               '()))
+                           (list
+                            (concat (file-name-as-directory (getenv "HOME")) ".ssh/config")
+                            "/etc/ssh_config"
+                            "/etc/ssh/ssh_config")))
+         (all-lines (apply #'append file-lines))
+         (matched-lines (-magit-gh-pulls-filter-and-split-host-lines all-lines)))
+    (magit-gh-pulls-get-host-hostnames matched-lines)))
+    
+              
+;; Port of github/hub's ParseURL
+(defun magit-gh-pulls-parse-url (url ssh-config-hosts)
+  (let* ((fixed-url (if (and (not (s-matches? "^[a-zA-Z_-]+://" url))
+                            (s-matches? ":" url)
+                            (not (s-matches? "\\\\\\\\" url))) ;;Two literal backlashes
+                       (concat "ssh://" (s-replace ":" "/" url))
+                      url))
+         (parsed-url (url-generic-parse-url fixed-url))
+         (ssh-host (when (string= (url-type parsed-url) "ssh")
+                     (assoc (url-host parsed-url) ssh-config-hosts))))
+    (when ssh-host
+      (setf (url-host parsed-url) (cadr ssh-host)))
+    (when (and 
+           (string= (url-host parsed-url) "github.com")
+           (s-matches? "\\(git\\|ssh\\|https?\\)" (url-type parsed-url)))
+      (let ((creds (s-match "/\\(.+\\)/\\([^./]*\\)\\(.git\\)?$" (url-filename parsed-url))))
+        (when creds
+          (cons (cadr creds) (cadr (cdr creds))))))))
+
+(ert-deftest magit-gh-pulls-parse-url-test ()
+  ;;Mock config hosts
+  (let ((ssh-config-hosts '(("one" . ("github.com")))))
+    (should (equal (magit-gh-pulls-parse-url "https://someotherhub.com/a/b" ssh-config-hosts) nil))
+    (should (equal (magit-gh-pulls-parse-url "https://someotherhub.com/a/b.git" ssh-config-hosts) nil))
+    (should (equal (magit-gh-pulls-parse-url "http://github.com/a/b.git" ssh-config-hosts) '("a" . "b")))
+    (should (equal (magit-gh-pulls-parse-url "http://github.com/a/b" ssh-config-hosts) '("a" . "b")))
+    (should (equal (magit-gh-pulls-parse-url "git://github.com/hi/there" ssh-config-hosts) '("hi" . "there")))
+    (should (equal (magit-gh-pulls-parse-url "user@github.com:ssh/repo" ssh-config-hosts) '("ssh" . "repo")))
+    (should (equal (magit-gh-pulls-parse-url "user@one:ssh/alias.git" ssh-config-hosts) '("ssh" . "alias")))))
+          
 
 (defun magit-gh-pulls-guess-repo-from-origin ()
-  (let ((creds nil))
+  (let ((creds nil)
+        (ssh-config-hosts (magit-gh-pulls-get-ssh-config-hosts)))
     (dolist (remote (magit-git-lines "remote") creds)
       (let ((parsed (magit-gh-pulls-parse-url
-                     (magit-get "remote" remote "url"))))
+                     (magit-get "remote" remote "url")
+                     ssh-config-hosts)))
         (when parsed
           (setq creds parsed))))))
 
