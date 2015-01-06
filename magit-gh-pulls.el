@@ -353,7 +353,9 @@
             (proj (cdr repo))
             (req (magit-gh-pulls-build-req user proj))
             (a (gh-pulls-new api user proj req)))
-        (kill-new (oref (oref a :data) :html-url))))))
+        (if (not (= (oref a :http-status) 201))
+            (error "Error creating pull-request.  Have you pushed the branch to github?")
+          (kill-new (oref (oref a :data) :html-url)))))))
 
 (defun magit-gh-pulls-reload ()
   (interactive)
