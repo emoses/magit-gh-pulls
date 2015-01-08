@@ -4,7 +4,7 @@
 
 ;; Author: Yann Hodique <yann.hodique@gmail.com>
 ;; Keywords: tools
-;; Version: 0.4.1
+;; Version: 0.4.2
 ;; URL: https://github.com/sigma/magit-gh-pulls
 ;; Package-Requires: ((emacs "24") (gh "0.4.3") (magit "1.1.0") (pcache "0.2.3") (s "1.6.1"))
 
@@ -325,19 +325,32 @@
                                (car k))
                           (pcache-invalidate cache k))))))
 
+(defun magit-gh-pulls-get-remote-default (&optional remote-name-override)
+  (let ((remote-name (or remote-name-override "origin"))
+        (remote-branches (magit-git-lines "branch" "-r"))
+         remote-head)
+    (while (and remote-branches (not remote-head))
+      (let ((m (s-match (format "^\\s-*%s/HEAD -> %s/\\(\\w*\\)" remote-name remote-name) (car remote-branches))))
+        (if m
+            (setq remote-head (cadr m))
+          (setq remote-branches (cdr remote-branches)))))
+    remote-head))
+    
+          
 
 (defun magit-gh-pulls-build-req (user proj)
-  (let ((current (replace-regexp-in-string "origin/" ""
+  (let* ((current (replace-regexp-in-string "origin/" ""
                                            (or (magit-get-remote/branch)
-                                               (magit-get-current-branch)))))
+                                               (magit-get-current-branch))))
+         (current-default (magit-gh-pulls-get-remote-default)))
     (let* ((base
             (make-instance 'gh-repos-ref :user (make-instance 'gh-users-user :name user)
                            :repo (make-instance 'gh-repos-repo :name proj)
-                           :ref (completing-read "Base (master):" '() nil nil nil nil "master")))
+                           :ref (magit-read-rev "Base" current-default))) 
            (head
             (make-instance 'gh-repos-ref :user (make-instance 'gh-users-user :name user)
                            :repo (make-instance 'gh-repos-repo :name proj)
-                           :ref (completing-read (format "Head (%s):" current) '() nil nil nil nil current)))
+                           :ref (magit-read-rev "Head" current)))
            (title (read-string "Title: "))
            (body (read-string "Description: "))
            (req (make-instance 'gh-pulls-request :head head :base base :body body :title title)))
@@ -355,7 +368,9 @@
             (a (gh-pulls-new api user proj req)))
         (if (not (= (oref a :http-status) 201))
             (error "Error creating pull-request.  Have you pushed the branch to github?")
-          (kill-new (oref (oref a :data) :html-url)))))))
+          (let ((url (oref (oref a :data) :html-url)))
+            (message (concat "Created pull-request and copied URL to kill ring: " url))
+            (kill-new url)))))))
 
 (defun magit-gh-pulls-reload ()
   (interactive)
