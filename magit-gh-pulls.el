@@ -58,6 +58,15 @@
 (require 'pcache)
 (require 's)
 
+(defgroup magit-gh-pulls nil
+  "Github.com pull-requests for Magit."
+  :group 'magit-extensions)
+
+(defcustom magit-gh-pulls-open-new-pr-in-browser t
+  "Open newly-created pull-requests automatically in the browser"
+  :group 'magit-gh-pulls
+  :type 'boolean)
+
 (defvar magit-gh-pulls-maybe-filter-pulls 'identity
   "Filter function which should validate pulls you want to be
   viewed in magit. It receives a list of pull requests and should
@@ -88,13 +97,6 @@
       (setq cur-line (car rest)))
     (list rest result)))
 
-(ert-deftest magit-gh-pulls-collect-hostnames-test ()
-  (let* ((sample-input '("extraneous" "Hostname one.other.com" "User doesntmatter" "HostName two.other.com"))
-         (sample-data-end (-magit-gh-pulls-filter-and-split-host-lines sample-input)) 
-         (more-input '("Host two" "Hostname should.not.show.up"))
-         (sample-data (-magit-gh-pulls-filter-and-split-host-lines (append sample-input more-input))))
-    (should (equal (magit-gh-pulls-collect-hostnames sample-data-end) '(() ("two.other.com" "one.other.com"))))
-    (should (equal (magit-gh-pulls-collect-hostnames sample-data) (list (-magit-gh-pulls-filter-and-split-host-lines more-input) '("two.other.com" "one.other.com")))))) 
                      
 (defun magit-gh-pulls-get-host-hostnames (config-lines)
   (let (result-alist
@@ -114,15 +116,6 @@
           (setq rest-lines (cdr rest-lines)))))
     result-alist))                      
         
-(ert-deftest magit-gh-pulls-host-hostnames-test ()
-  (let* ((sample-input '("Host one" "extraneous" "\tHostname one.other.com" "\t\tUser doesntmatter" "HostName two.other.com"))
-         (sample-data (-magit-gh-pulls-filter-and-split-host-lines sample-input))
-         (more-input '("Sir not appearing in this picture" "Host two" "IdentityFile ~/.ssh/HostName" "\tUser Host" "HostName two.host.com"))
-         (bigger-sample (-magit-gh-pulls-filter-and-split-host-lines (append sample-input more-input))))
-    (should (equal (magit-gh-pulls-get-host-hostnames sample-data) '(("one" . ("two.other.com" "one.other.com")))))
-    (should (equal (magit-gh-pulls-get-host-hostnames bigger-sample) '(("two" . ("two.host.com")) ("one" . ("two.other.com" "one.other.com")))))))
-         
-
 (defun -magit-gh-pulls-filter-and-split-host-lines (lines)
   (delq nil
         (mapcar (lambda (line)
@@ -165,17 +158,6 @@
       (let ((creds (s-match "/\\(.+\\)/\\([^./]*\\)\\(.git\\)?$" (url-filename parsed-url))))
         (when creds
           (cons (cadr creds) (cadr (cdr creds))))))))
-
-(ert-deftest magit-gh-pulls-parse-url-test ()
-  ;;Mock config hosts
-  (let ((ssh-config-hosts '(("one" . ("github.com")))))
-    (should (equal (magit-gh-pulls-parse-url "https://someotherhub.com/a/b" ssh-config-hosts) nil))
-    (should (equal (magit-gh-pulls-parse-url "https://someotherhub.com/a/b.git" ssh-config-hosts) nil))
-    (should (equal (magit-gh-pulls-parse-url "http://github.com/a/b.git" ssh-config-hosts) '("a" . "b")))
-    (should (equal (magit-gh-pulls-parse-url "http://github.com/a/b" ssh-config-hosts) '("a" . "b")))
-    (should (equal (magit-gh-pulls-parse-url "git://github.com/hi/there" ssh-config-hosts) '("hi" . "there")))
-    (should (equal (magit-gh-pulls-parse-url "user@github.com:ssh/repo" ssh-config-hosts) '("ssh" . "repo")))
-    (should (equal (magit-gh-pulls-parse-url "user@one:ssh/alias.git" ssh-config-hosts) '("ssh" . "alias")))))
           
 
 (defun magit-gh-pulls-guess-repo-from-origin ()
@@ -370,6 +352,8 @@
             (error "Error creating pull-request.  Have you pushed the branch to github?")
           (let ((url (oref (oref a :data) :html-url)))
             (message (concat "Created pull-request and copied URL to kill ring: " url))
+            (when magit-gh-pulls-open-new-pr-in-browser
+              (browse-url url))
             (kill-new url)))))))
 
 (defun magit-gh-pulls-reload ()
