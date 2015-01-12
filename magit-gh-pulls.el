@@ -349,7 +349,7 @@
             (req (magit-gh-pulls-build-req user proj))
             (a (gh-pulls-new api user proj req)))
         (if (not (= (oref a :http-status) 201))
-            (error "Error creating pull-request.  Have you pushed the branch to github?")
+            (message "Error creating pull-request: %s.  Have you pushed the branch to github?" (cdr (assoc "Status" (oref a :headers))))
           (let ((url (oref (oref a :data) :html-url)))
             (message (concat "Created pull-request and copied URL to kill ring: " url))
             (when magit-gh-pulls-open-new-pr-in-browser
@@ -378,6 +378,11 @@
 (easy-menu-add-item 'magit-mode-menu
                     '("Extensions")
                     magit-gh-pulls-extension-menu)
+
+
+(magit-define-section-jumper pulls "Pull Requests")
+
+(define-key magit-section-jump-map (kbd "q") 'magit-jump-to-pulls)
 
 (defvar magit-gh-pulls-mode-map
   (let ((map (make-sparse-keymap)))
