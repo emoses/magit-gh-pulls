@@ -6,7 +6,7 @@
 ;; Keywords: git tools
 ;; Version: 0.5.1
 ;; URL: https://github.com/sigma/magit-gh-pulls
-;; Package-Requires: ((emacs "24") (gh "0.4.3") (magit "2.1.0") (pcache "0.2.3") (s "1.6.1"))
+;; Package-Requires: ((emacs "24") (gh "0.9.1") (magit "2.1.0") (pcache "0.2.3") (s "1.6.1"))
 
 ;; This file is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -103,7 +103,7 @@
       (setq cur-line (car rest)))
     (list rest result)))
 
-                     
+
 (defun magit-gh-pulls-get-host-hostnames (config-lines)
   (let (result-alist
         (curline (car config-lines))
@@ -120,15 +120,15 @@
         (progn
           (setq curline (car rest-lines))
           (setq rest-lines (cdr rest-lines)))))
-    result-alist))                      
-        
+    result-alist))
+
 (defun -magit-gh-pulls-filter-and-split-host-lines (lines)
   (delq nil
         (mapcar (lambda (line)
                   (s-match "^[ \t]*\\(Host\\|HostName\\|Hostname\\)[ \t]+\\(.+\\)$" line))
                 lines)))
-                       
-                  
+
+
 ;; Port of github/hub's SSHConfig
 (defun magit-gh-pulls-get-ssh-config-hosts ()
   (let* ((file-lines (mapcar (lambda (path)
@@ -144,9 +144,9 @@
          (all-lines (apply #'append file-lines))
          (matched-lines (-magit-gh-pulls-filter-and-split-host-lines all-lines)))
     (magit-gh-pulls-get-host-hostnames matched-lines)))
-    
-              
-;; Port of github/hub's ParseURL
+
+
+;; Port of github/hub's ParseURL, with modifications to align with existing parse-url
 (defun magit-gh-pulls-parse-url (url ssh-config-hosts)
   (let* ((fixed-url (if (and (not (s-matches? "^[a-zA-Z_-]+://" url))
                             (s-matches? ":" url)
@@ -158,13 +158,13 @@
                      (assoc (url-host parsed-url) ssh-config-hosts))))
     (when ssh-host
       (setf (url-host parsed-url) (cadr ssh-host)))
-    (when (and 
+    (when (and
            (string= (url-host parsed-url) "github.com")
            (s-matches? "\\(git\\|ssh\\|https?\\)" (url-type parsed-url)))
-      (let ((creds (s-match "/\\(.+\\)/\\([^./]*\\)\\(.git\\)?$" (url-filename parsed-url))))
+      (let ((creds (s-match "/\\(.+\\)/\\([^/]+\\)/?$" (url-filename parsed-url))))
         (when creds
-          (cons (cadr creds) (cadr (cdr creds))))))))
-          
+          (cons (cadr creds) (s-chop-suffix ".git" (cadr (cdr creds)))))))))
+
 
 (defun magit-gh-pulls-guess-repo-from-origin ()
   (let ((creds nil)
@@ -353,17 +353,17 @@
             (setq remote-head (cadr m))
           (setq remote-branches (cdr remote-branches)))))
     remote-head))
-    
-          
+
+
 
 (defun magit-gh-pulls-build-req (user proj)
   (let* ((current (or (cdr (magit-get-remote-branch))
-                     (magit-get-current-branch))
-         (current-default (magit-gh-pulls-get-remote-default))))
+                     (magit-get-current-branch)))
+         (current-default (magit-gh-pulls-get-remote-default)))
     (let* ((base
             (make-instance 'gh-repos-ref :user (make-instance 'gh-users-user :name user)
                            :repo (make-instance 'gh-repos-repo :name proj)
-                           :ref (magit-read-rev "Base" current-default))) 
+                           :ref (magit-read-rev "Base" current-default)))
            (head
             (make-instance 'gh-repos-ref :user (make-instance 'gh-users-user :name user)
                            :repo (make-instance 'gh-repos-repo :name proj)
@@ -417,8 +417,7 @@
 
 
 (magit-define-section-jumper pulls "Pull Requests")
-
-(define-key magit-section-jump-map (kbd "q") 'magit-jump-to-pulls)
+(define-key magit-status-mode-map (kbd "jq") 'magit-jump-to-pulls)
 
 (defvar magit-gh-pulls-mode-map
   (let ((map (make-sparse-keymap)))
