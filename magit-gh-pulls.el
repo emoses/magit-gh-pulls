@@ -4,7 +4,7 @@
 
 ;; Author: Yann Hodique <yann.hodique@gmail.com>
 ;; Keywords: git tools
-;; Version: 0.5.1
+;; Version: 0.5.2
 ;; URL: https://github.com/sigma/magit-gh-pulls
 ;; Package-Requires: ((emacs "24") (gh "0.9.1") (magit "2.1.0") (pcache "0.2.3") (s "1.6.1"))
 
@@ -363,11 +363,11 @@
     (let* ((base
             (make-instance 'gh-repos-ref :user (make-instance 'gh-users-user :name user)
                            :repo (make-instance 'gh-repos-repo :name proj)
-                           :ref (magit-read-rev "Base" current-default)))
+                           :ref (magit-read-other-branch-or-commit "Base" nil current-default)))
            (head
             (make-instance 'gh-repos-ref :user (make-instance 'gh-users-user :name user)
                            :repo (make-instance 'gh-repos-repo :name proj)
-                           :ref (magit-read-rev "Head" current)))
+                           :ref (magit-read-other-branch-or-commit "Head" nil current)))
            (title (read-string "Title: "))
            (body (read-string "Description: "))
            (req (make-instance 'gh-pulls-request :head head :base base :body body :title title)))
