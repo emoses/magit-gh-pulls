@@ -99,6 +99,10 @@ When nil, default string is constructed.")
 
 (defvar-local magit-gh-pulls-previous-winconf nil)
 
+(defvar-local magit-gh-pulls-previous-pr-contents nil
+  "The contents of the buffer from the previous submit.  If non-nil,
+prompt to restore when opening a PR" )
+
 (defvar magit-gh-pulls-editor-mode-map
   (let ((map (make-keymap)))
     (define-key map (kbd "C-c C-c") 'magit-gh-pulls-pull-editor-finish)
@@ -475,10 +479,14 @@ option, or inferred from remotes."
     (funcall (if (functionp 'markdown-mode)
                  'markdown-mode 'text-mode))
     (funcall 'magit-gh-pulls-editor-mode)
-    (insert (or default-title "") "\n\n") ; Title
-    (if (magit-gh-pulls-pr-template-file) ; Body
-        (insert-file-contents (magit-gh-pulls-pr-template-file))
-      (insert default-body))
+    (if (and magit-gh-pulls-previous-pr-contents (y-or-n-p "Restore previous PR draft?"))
+        (progn
+          (insert magit-gh-pulls-previous-pr-contents)
+          (setq magit-gh-pulls-previous-pr-contents nil))
+      (insert (or default-title "") "\n\n") ; Title
+      (if (magit-gh-pulls-pr-template-file) ; Body
+          (insert-file-contents (magit-gh-pulls-pr-template-file))
+        (insert default-body)))
     (goto-char (point-min))
     (message "Opening pull request editor. C-c C-c to finish, C-c C-k to quit.")
     (setq-local magit-gh-pulls-editor-callback callback)
@@ -490,22 +498,24 @@ option, or inferred from remotes."
    pull request editor buffer."
   (interactive)
   (if (eq nil magit-gh-pulls-editor-callback)
-      (message "This function can only be run in a pull editor buffer.")
+    (message "This function can only be run in a pull editor buffer.")
     (let* ((end-of-first-line (save-excursion
                                 (beginning-of-buffer)
                                 (line-end-position)))
            (title (s-trim (buffer-substring-no-properties 1 end-of-first-line)))
            (body (s-trim (buffer-substring-no-properties end-of-first-line (point-max)))))
-      (funcall magit-gh-pulls-editor-callback title body)
-      (magit-gh-pulls-pull-editor-quit))))
+      (let ((err (funcall magit-gh-pulls-editor-callback title body)))
+        (magit-gh-pulls-pull-editor-quit err)))))
 
-(defun magit-gh-pulls-pull-editor-quit ()
+(defun magit-gh-pulls-pull-editor-quit ( &optional save-contents )
   "Cleanup the current pull request editor and restore
    the previous window config."
   (interactive)
   (if (eq nil magit-gh-pulls-editor-callback)
       (message "This function can only be run in a pull editor buffer.")
     (let ((winconf magit-gh-pulls-previous-winconf))
+      (when save-contents
+        (setq magit-gh-pulls-previous-pr-contents (buffer-string)))
       (kill-buffer)
       (kill-local-variable 'magit-gh-pulls-previous-winconf)
       (when winconf
@@ -521,10 +531,13 @@ option, or inferred from remotes."
 
 (defun magit-gh-pulls-submit-pull-request (api user proj req)
   "Endpoint for creating a new pull request. Actually sends the
-  PR creation API request to Github."
+  PR creation API request to Github. If the return value is non-nil,
+  this indicates an error during submit."
   (let* ((a (gh-pulls-new api user proj req)))
     (if (not (= (oref a :http-status) 201))
-        (message "Error creating pull-request: %s.  Have you pushed the branch to github?" (cdr (assoc "Status" (oref a :headers))))
+        (progn
+          (message "Error creating pull-request: %s.  Have you pushed the branch to github?" (cdr (assoc "Status" (oref a :headers))))
+          t)
       (let ((url (oref (oref a :data) :html-url)))
         (message (concat "Created pull-request and copied URL to kill ring: " url))
         (when (member "--open-new-in-browser" (magit-gh-pulls-arguments))
